@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+data/raw/
+data/processed/
+work/
+generated/
+build/
+
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# emlearn writes test builds here during conversion
+tmp/
