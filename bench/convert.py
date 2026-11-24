@@ -13,19 +13,23 @@ The firmware and the host check compile the same files.
 import argparse
 import json
 import re
+import subprocess
 import sys
+import threading
 import time
 import traceback
 
+import emlearn
 import joblib
 import m2cgen
 import micromlgen
-import emlearn
 
 from bench.config import (BASELINE, DATA_PROCESSED, MODELS_DIR, config_id, generated_dir,
                           iter_configs)
 
-sys.setrecursionlimit(100000)  # m2cgen recurses deeply on large SVC models
+# m2cgen recurses deeply on large SVC models; conversions run on a thread with a large stack.
+sys.setrecursionlimit(1_000_000)
+THREAD_STACK_BYTES = 512 * 1024 * 1024
 
 C_HEADERS = "#include <stdint.h>\n#include <string.h>\n#include <math.h>\n"
 
@@ -167,18 +171,48 @@ def convert_one(dataset, model, tool):
     return meta
 
 
+def convert_in_thread(dataset, model, tool):
+    """Run one conversion on a thread with a large stack (m2cgen recurses deeply)."""
+    threading.stack_size(THREAD_STACK_BYTES)
+    worker = threading.Thread(target=convert_one, args=(dataset, model, tool))
+    worker.start()
+    worker.join()
+
+
+def convert_isolated(dataset, model, tool):
+    """Convert in a child process so that a crash of the tool is recorded, not fatal."""
+    meta_path = generated_dir(dataset, model, tool) / "meta.json"
+    meta_path.unlink(missing_ok=True)
+    r = subprocess.run([sys.executable, "-m", "bench.convert", "--one", dataset, model, tool],
+                       capture_output=True, text=True)
+    if meta_path.exists():
+        return json.loads(meta_path.read_text())
+    meta = {"dataset": dataset, "model": model, "tool": tool, "status": "convert_error",
+            "error": f"converter process exited with code {r.returncode}",
+            "stderr": r.stderr[-2000:], "seconds": None, "source_bytes": 0}
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", nargs="*")
     parser.add_argument("--model", nargs="*")
     parser.add_argument("--tool", nargs="*")
+    parser.add_argument("--one", nargs=3, metavar=("DATASET", "MODEL", "TOOL"), help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.one:
+        convert_in_thread(*args.one)
+        return
 
     for dataset, model, tool in iter_configs(args.dataset, args.model, args.tool,
                                              include_baseline=args.model is None and args.tool is None):
-        meta = convert_one(dataset, model, tool)
+        meta = convert_isolated(dataset, model, tool)
         detail = meta.get("error", f"{meta['source_bytes'] // 1024} KB")
-        print(f"{config_id(dataset, model, tool):32} {meta['status']:14} {meta['seconds']:7.1f}s  {detail}")
+        seconds = "" if meta["seconds"] is None else f"{meta['seconds']:.1f}s"
+        print(f"{config_id(dataset, model, tool):32} {meta['status']:14} {seconds:>8}  {detail}")
 
 
 if __name__ == "__main__":
