@@ -86,6 +86,18 @@ Project ESP-IDF v6.1.1 trong `firmware/`, dùng chung cho cả ba target.
 
 Mỗi profile có thư mục build riêng `build/<profile>/`. Cấu hình cần đo được chép vào `build/<profile>/model/` rồi build lại.
 
+Trạng thái build trong `results/size.csv`:
+
+| Trạng thái | Ý nghĩa |
+| --- | --- |
+| `ok` | build thành công |
+| `too_large` | tràn một vùng nhớ (ví dụ `iram0_2_seg`) hoặc phân vùng ứng dụng |
+| `literal_range` | Xtensa: `l32r: literal target out of range` (hằng số nằm xa hơn 256 KB so với lệnh dùng nó) |
+| `build_timeout` | build không xong sau 3600 s |
+| `build_error` | lỗi khác |
+
+Cấu hình bị `literal_range` được build lại một lần với `-DMODEL_LITPOOLS=ON`, tức `-mtext-section-literals -mauto-litpools` cho mã mô hình. Lần build này được ghi với `build_flags = litpools`; `bench.run` nạp bản build thành công.
+
 Giao thức với máy tính (little-endian, mỗi lần một yêu cầu):
 
 | Máy tính gửi | Board trả lời |
