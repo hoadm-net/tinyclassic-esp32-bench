@@ -1,0 +1,36 @@
+menu "Bench"
+
+    choice BENCH_LINK
+        prompt "Link to the host"
+        default BENCH_LINK_UART
+
+        config BENCH_LINK_UART
+            bool "UART0 (USB-UART bridge on the DevKit)"
+
+        config BENCH_LINK_USB_SERIAL_JTAG
+            bool "USB Serial/JTAG"
+            depends on SOC_USB_SERIAL_JTAG_SUPPORTED
+    endchoice
+
+    config BENCH_UART_BAUD
+        int "UART baud rate"
+        default 921600
+        depends on BENCH_LINK_UART
+
+    config BENCH_WARMUP
+        int "Untimed calls before measuring each sample"
+        default 3
+
+    config BENCH_REPEATS
+        int "Timed calls per sample (the median is reported)"
+        default 7
+
+    config BENCH_SLOW_CYCLES
+        int "Measure only once when a call takes more than this many cycles"
+        default 20000000
+
+    config BENCH_TASK_STACK
+        int "Stack size of the measurement task (bytes)"
+        default 32768
+
+endmenu
