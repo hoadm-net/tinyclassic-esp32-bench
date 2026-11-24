@@ -21,7 +21,7 @@ import pandas as pd
 import serial
 
 from bench.config import (DATA_PROCESSED, MODELS_DIR, PROFILES, RESULTS, config_id, iter_configs)
-from bench.firmware import build, flash
+from bench.firmware import build_with_fallback, flash
 
 SAMPLE_REPLY = struct.Struct("<ciIII")  # 'R', label, median cycles, min cycles, timed calls
 END_REPLY = struct.Struct("<cIIII")     # 'M', stack size, stack free min, heap free, heap free min
@@ -75,14 +75,14 @@ class Board:
                 "heap_free": heap, "heap_free_min": heap_min}
 
 
-def run_one(profile, port, baud, dataset, model, tool, limit):
+def run_one(profile, port, baud, dataset, model, tool, limit, litpools):
     X = np.load(DATA_PROCESSED / dataset / "X_test.npy")
     y_true = np.load(DATA_PROCESSED / dataset / "y_test.npy")
     ref = (np.load(MODELS_DIR / dataset / f"{model}.ref.npy") if tool != "baseline"
            else np.zeros(len(y_true), dtype=np.int32))
     n = len(X) if limit is None else min(limit, len(X))
 
-    flash(profile, port)
+    flash(profile, port, litpools)
     board = Board(port, baud)
     try:
         info = board.hello()
@@ -97,7 +97,8 @@ def run_one(profile, port, baud, dataset, model, tool, limit):
         info.update(board.end())
     finally:
         board.close()
-    info.update({"profile": profile, "n_samples": n, "seconds": round(time.monotonic() - t0, 1),
+    info.update({"profile": profile, "build_flags": "litpools" if litpools else "default",
+                 "n_samples": n, "seconds": round(time.monotonic() - t0, 1),
                  "finished": datetime.now(timezone.utc).isoformat(timespec="seconds")})
     df = pd.DataFrame(rows, columns=["idx", "label", "ref", "y_true", "cycles_median",
                                      "cycles_min", "timed_calls"])
@@ -124,11 +125,13 @@ def main() -> None:
         if stem.with_suffix(".json").exists() and not args.force:
             print(f"{cid:32} done")
             continue
-        size = build(args.profile, dataset, model, tool)
+        builds = build_with_fallback(args.profile, dataset, model, tool)
+        flags, size = builds[-1]
         if size["status"] != "ok":
-            print(f"{cid:32} skip ({size['status']})")
+            print(f"{cid:32} skip ({', '.join(r['status'] for _, r in builds)})")
             continue
-        df, info = run_one(args.profile, args.port, args.baud, dataset, model, tool, args.limit)
+        df, info = run_one(args.profile, args.port, args.baud, dataset, model, tool, args.limit,
+                           litpools=flags == "litpools")
         df.to_csv(stem.with_suffix(".csv"), index=False)
         stem.with_suffix(".json").write_text(json.dumps(info, indent=2) + "\n")
         agree = (df.label == df.ref).mean()

@@ -24,7 +24,7 @@ def board_runs() -> pd.DataFrame:
         cycles = df["cycles_median"].to_numpy()
         rows.append({
             "profile": csv.parent.name, "dataset": dataset, "model": model, "tool": tool,
-            "n_samples": len(df),
+            "n_samples": len(df), "board_build_flags": info.get("build_flags", "default"),
             "agreement_board": float(np.mean(df["label"] == df["ref"])),
             "accuracy_board": accuracy_score(df["y_true"], df["label"]),
             "macro_f1_board": f1_score(df["y_true"], df["label"], average="macro"),
@@ -43,15 +43,29 @@ def sizes() -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=KEY)
     size = pd.read_csv(path)
+    if "build_flags" not in size:
+        size["build_flags"] = "default"
     size["ram_static"] = size["dram_data"].fillna(0) + size["dram_bss"].fillna(0)
-    base = (size[size.tool == BASELINE][["profile", "dataset", "bin_bytes", "ram_static"]]
+    base = (size[(size.tool == BASELINE) & (size.build_flags == "default")]
+            [["profile", "dataset", "bin_bytes", "ram_static"]]
             .rename(columns={"bin_bytes": "base_bin", "ram_static": "base_ram"}))
     size = size[size.tool != BASELINE].merge(base, on=["profile", "dataset"], how="left")
     size["flash_model_bytes"] = size["bin_bytes"] - size["base_bin"]
     size["ram_model_bytes"] = size["ram_static"] - size["base_ram"]
     size.loc[size.status != "ok", ["flash_model_bytes", "ram_model_bytes"]] = np.nan
-    return size[KEY + ["status", "flash_model_bytes", "ram_model_bytes", "detail"]].rename(
-        columns={"status": "build_status", "detail": "build_detail"})
+
+    default = size[size.build_flags == "default"].set_index(KEY)
+    litpools = size[size.build_flags == "litpools"].set_index(KEY)
+    out = default[["status", "detail"]].rename(columns={"status": "build_status", "detail": "build_detail"})
+    out["litpools_status"] = litpools["status"]
+    # Sizes come from the build that is flashed: the default one, or the litpools rebuild.
+    used = litpools.where(default["status"].reindex(litpools.index) != "ok").dropna(how="all")
+    sizes = default[["flash_model_bytes", "ram_model_bytes"]].copy()
+    sizes.update(used[["flash_model_bytes", "ram_model_bytes"]])
+    out = out.join(sizes)
+    out["build_flags_used"] = np.where(out.build_status == "ok", "default",
+                                       np.where(out.litpools_status == "ok", "litpools", None))
+    return out.reset_index()
 
 
 def main() -> None:

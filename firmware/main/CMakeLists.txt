@@ -24,4 +24,11 @@ idf_component_register(
     PRIV_REQUIRES esp_driver_uart esp_driver_usb_serial_jtag esp_hw_support freertos heap log)
 
 # The tool output is compiled as is; its warnings are not ours to fix.
-set_source_files_properties(${MODEL_SRCS} PROPERTIES COMPILE_OPTIONS "-w")
+set(model_options "-w")
+# MODEL_LITPOOLS=ON places literal pools next to the code that uses them, for functions too
+# large for the 256 KB reach of the Xtensa L32R instruction. Used only when the default build
+# fails with "l32r: literal target out of range".
+if(MODEL_LITPOOLS AND CONFIG_IDF_TARGET_ARCH_XTENSA)
+    list(APPEND model_options "-mtext-section-literals" "-mauto-litpools")
+endif()
+set_source_files_properties(${MODEL_SRCS} PROPERTIES COMPILE_OPTIONS "${model_options}")
