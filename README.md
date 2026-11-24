@@ -77,7 +77,7 @@ Project ESP-IDF v6.1.1 trong `firmware/`, dùng chung cho cả ba target.
 
 | File | Nội dung |
 | --- | --- |
-| `sdkconfig.defaults` | `-O2` (`COMPILER_OPTIMIZATION_PERF`), 240 MHz, console UART 921600 baud, flash 4 MB, bảng phân vùng riêng |
+| `sdkconfig.defaults` | `-O2` (`COMPILER_OPTIMIZATION_PERF`), 240 MHz, flash 4 MB, bảng phân vùng riêng |
 | `sdkconfig.defaults.esp32c3` | 160 MHz, tắt console phụ qua USB Serial/JTAG |
 | `sdkconfig.defaults.esp32s3` | tắt console phụ qua USB Serial/JTAG |
 | `sdkconfig.160mhz` | 160 MHz, dùng cho `esp32_160` và `esp32s3_160` |
