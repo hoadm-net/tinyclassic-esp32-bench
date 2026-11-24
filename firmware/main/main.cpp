@@ -10,8 +10,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <algorithm>
-
 #include "esp_cpu.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -57,6 +55,19 @@ uint32_t timed_call(int *label)
     return (uint32_t)(t1 - t0);
 }
 
+void sort_cycles(uint32_t *v, int n)
+{
+    for (int i = 1; i < n; i++) {
+        uint32_t key = v[i];
+        int j = i - 1;
+        while (j >= 0 && v[j] > key) {
+            v[j + 1] = v[j];
+            j--;
+        }
+        v[j + 1] = key;
+    }
+}
+
 void send_hello()
 {
     char line[200];
@@ -88,7 +99,7 @@ void handle_sample()
         }
     }
 
-    std::sort(cycles, cycles + timed);
+    sort_cycles(cycles, timed);
     SampleReply reply = {'R', label, cycles[timed / 2], cycles[0], (uint32_t)timed};
     link_write(&reply, sizeof reply);
 }
