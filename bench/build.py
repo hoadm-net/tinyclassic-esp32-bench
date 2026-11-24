@@ -1,0 +1,64 @@
+"""Build the firmware for every configuration and record flash/RAM usage.
+
+Run inside an ESP-IDF v6.1.1 environment (after `. $IDF_PATH/export.sh`).
+
+Usage: python -m bench.build --profile esp32_240 [--dataset ...] [--model ...] [--tool ...]
+
+Results in results/size.csv and results/size/<profile>/<dataset>__<model>__<tool>.json.
+"""
+
+import argparse
+import json
+
+import pandas as pd
+
+from bench.config import PROFILES, RESULTS, config_id, generated_dir, iter_configs
+from bench.firmware import build
+
+SECTIONS = {
+    "flash_text": ".flash.text",
+    "flash_rodata": ".flash.rodata",
+    "iram_text": ".iram0.text",
+    "dram_data": ".dram0.data",
+    "dram_bss": ".dram0.bss",
+}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", nargs="+", required=True, choices=PROFILES)
+    parser.add_argument("--dataset", nargs="*")
+    parser.add_argument("--model", nargs="*")
+    parser.add_argument("--tool", nargs="*")
+    args = parser.parse_args()
+
+    out_csv = RESULTS / "size.csv"
+    rows = pd.read_csv(out_csv).to_dict("records") if out_csv.exists() else []
+    for profile in args.profile:
+        out_dir = RESULTS / "size" / profile
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for dataset, model, tool in iter_configs(args.dataset, args.model, args.tool,
+                                                 include_baseline=True):
+            meta = json.loads((generated_dir(dataset, model, tool) / "meta.json").read_text())
+            if meta["status"] != "ok":
+                result = {"status": meta["status"], "detail": meta.get("error")}
+            else:
+                result = build(profile, dataset, model, tool)
+            (out_dir / f"{dataset}__{model}__{tool}.json").write_text(json.dumps(result, indent=2) + "\n")
+
+            row = {"profile": profile, "dataset": dataset, "model": model, "tool": tool,
+                   "status": result["status"], "bin_bytes": result.get("bin_bytes"),
+                   "detail": result.get("detail")}
+            sections = result.get("sections", {})
+            for column, name in SECTIONS.items():
+                row[column] = sections.get(name) if sections else None
+            rows = [r for r in rows if (r["profile"], r["dataset"], r["model"], r["tool"])
+                    != (profile, dataset, model, tool)]
+            rows.append(row)
+            print(f"{profile:12} {config_id(dataset, model, tool):32} {row['status']:12} "
+                  f"{row['bin_bytes'] or ''} {row['detail'] or ''}"[:200])
+            pd.DataFrame(rows).sort_values(["profile", "dataset", "model", "tool"]).to_csv(out_csv, index=False)
+
+
+if __name__ == "__main__":
+    main()
