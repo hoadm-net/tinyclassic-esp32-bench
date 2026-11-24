@@ -1,0 +1,185 @@
+"""Convert trained models to C/C++ with each tool.
+
+Usage: python -m bench.convert [--dataset ...] [--model ...] [--tool ...]
+
+Every configuration gets a directory generated/<dataset>/<model>/<tool>/ with
+  model_info.h   BENCH_N_FEATURES, BENCH_N_CLASSES, BENCH_MODEL_ID
+  model.h/.c     raw output of the tool
+  adapter.c/.cpp defines `int bench_predict(const float *x)` (C linkage)
+  meta.json      conversion status
+The firmware and the host check compile the same files.
+"""
+
+import argparse
+import json
+import re
+import sys
+import time
+import traceback
+
+import joblib
+import m2cgen
+import micromlgen
+import emlearn
+
+from bench.config import (BASELINE, DATA_PROCESSED, MODELS_DIR, config_id, generated_dir,
+                          iter_configs)
+
+sys.setrecursionlimit(100000)  # m2cgen recurses deeply on large SVC models
+
+C_HEADERS = "#include <stdint.h>\n#include <string.h>\n#include <math.h>\n"
+
+
+def model_info(dataset, model, tool, n_features, n_classes):
+    return (f"#pragma once\n"
+            f"#define BENCH_N_FEATURES {n_features}\n"
+            f"#define BENCH_N_CLASSES {n_classes}\n"
+            f"#define BENCH_MODEL_ID \"{config_id(dataset, model, tool)}\"\n")
+
+
+def write_baseline(out):
+    (out / "adapter.c").write_text(
+        '#include "model_info.h"\n\n'
+        "int bench_predict(const float *x)\n{\n    (void)x;\n    return 0;\n}\n")
+    return {"lang": "c"}
+
+
+def write_emlearn(est, model, out, n_features, n_classes):
+    if model.startswith(("dt", "rf")):
+        converted = emlearn.convert(est, method="inline", dtype="float")
+    else:
+        converted = emlearn.convert(est)
+    converted.save(file=str(out / "model.h"), name="model")
+    (out / "adapter.c").write_text(
+        C_HEADERS + '#include "model_info.h"\n#include "model.h"\n\n'
+        "int bench_predict(const float *x)\n{\n"
+        "    return (int)model_predict(x, BENCH_N_FEATURES);\n}\n")
+    return {"lang": "c"}
+
+
+def write_micromlgen(est, model, out, n_features, n_classes):
+    if model == "gnb" and not hasattr(est, "sigma_"):
+        est.sigma_ = est.var_  # attribute renamed in scikit-learn 1.0
+    (out / "model.h").write_text(micromlgen.port(est, classname="Model"))
+    (out / "adapter.cpp").write_text(
+        C_HEADERS + '#include <stdlib.h>\n#include "model_info.h"\n#include "model.h"\n\n'
+        "static Eloquent::ML::Port::Model bench_model;\n\n"
+        'extern "C" int bench_predict(const float *x)\n{\n'
+        "    return bench_model.predict(const_cast<float *>(x));\n}\n")
+    return {"lang": "cpp"}
+
+
+def m2cgen_to_float(src: str) -> str:
+    """Rewrite m2cgen C output to single precision."""
+    src = re.sub(r"\bdouble\b", "float", src)
+    src = re.sub(r"\bexp\(", "expf(", src)
+    src = re.sub(r"\bpow\(", "powf(", src)
+    src = re.sub(r"(\d\.\d+(?:[eE][-+]?\d+)?)(?![\dfF])", r"\1f", src)
+    return src
+
+
+def write_m2cgen(est, model, out, n_features, n_classes, use_float=False):
+    src = m2cgen.export_to_c(est)
+    if use_float:
+        src = m2cgen_to_float(src)
+    T = "float" if use_float else "double"
+    (out / "model.c").write_text(C_HEADERS + src)
+
+    if re.search(r"\bvoid score\(", src):
+        if model == "svc" and n_classes > 2:
+            n_out, decode = n_classes * (n_classes - 1) // 2, "ovo"
+        else:
+            n_out, decode = n_classes, "argmax"
+        proto = f"void score({T} *input, {T} *output);"
+    else:
+        n_out, decode = 1, "sign"
+        proto = f"{T} score({T} *input);"
+
+    if use_float:
+        prep, arg = "", "(float *)x"
+    else:
+        prep = ("    double in[BENCH_N_FEATURES];\n"
+                "    for (int i = 0; i < BENCH_N_FEATURES; i++) in[i] = x[i];\n")
+        arg = "in"
+
+    if decode == "sign":
+        body = f"    return score({arg}) > 0 ? 1 : 0;\n"
+    elif decode == "argmax":
+        body = (f"    {T} out[{n_out}];\n    score({arg}, out);\n"
+                "    int best = 0;\n"
+                f"    for (int c = 1; c < {n_out}; c++) if (out[c] > out[best]) best = c;\n"
+                "    return best;\n")
+    else:  # one-vs-one voting, pairs ordered (0,1), (0,2), ..., (K-2,K-1)
+        body = (f"    {T} out[{n_out}];\n    score({arg}, out);\n"
+                "    int votes[BENCH_N_CLASSES] = {0};\n"
+                "    int k = 0;\n"
+                "    for (int i = 0; i < BENCH_N_CLASSES; i++)\n"
+                "        for (int j = i + 1; j < BENCH_N_CLASSES; j++, k++)\n"
+                "            votes[out[k] > 0 ? i : j]++;\n"
+                "    int best = 0;\n"
+                "    for (int c = 1; c < BENCH_N_CLASSES; c++) if (votes[c] > votes[best]) best = c;\n"
+                "    return best;\n")
+
+    (out / "adapter.c").write_text(
+        '#include "model_info.h"\n\n' + proto + "\n\n"
+        "int bench_predict(const float *x)\n{\n" + prep + body + "}\n")
+    return {"lang": "c", "decode": decode, "n_outputs": n_out}
+
+
+def convert_one(dataset, model, tool):
+    meta_ds = json.loads((DATA_PROCESSED / dataset / "meta.json").read_text())
+    n_features, n_classes = meta_ds["n_features"], meta_ds["n_classes"]
+    out = generated_dir(dataset, model, tool)
+    out.mkdir(parents=True, exist_ok=True)
+    for f in out.iterdir():
+        f.unlink()
+    (out / "model_info.h").write_text(model_info(dataset, model, tool, n_features, n_classes))
+
+    meta = {"dataset": dataset, "model": model, "tool": tool,
+            "n_features": n_features, "n_classes": n_classes}
+    t0 = time.perf_counter()
+    try:
+        if tool == BASELINE:
+            meta.update(write_baseline(out))
+        else:
+            est = joblib.load(MODELS_DIR / dataset / f"{model}.joblib")
+            if tool == "emlearn":
+                meta.update(write_emlearn(est, model, out, n_features, n_classes))
+            elif tool == "micromlgen":
+                meta.update(write_micromlgen(est, model, out, n_features, n_classes))
+            elif tool == "m2cgen":
+                meta.update(write_m2cgen(est, model, out, n_features, n_classes))
+            elif tool == "m2cgen_float":
+                meta.update(write_m2cgen(est, model, out, n_features, n_classes, use_float=True))
+            else:
+                raise ValueError(tool)
+        meta["status"] = "ok"
+    except Exception as e:  # conversion failures are results, not crashes
+        meta["status"] = "convert_error"
+        meta["error"] = f"{type(e).__name__}: {e}"[:500]
+        meta["traceback"] = traceback.format_exc()[-2000:]
+        for f in out.iterdir():
+            if f.name not in ("model_info.h",):
+                f.unlink()
+    meta["seconds"] = round(time.perf_counter() - t0, 3)
+    meta["source_bytes"] = sum(f.stat().st_size for f in out.iterdir() if f.name.startswith("model."))
+    (out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", nargs="*")
+    parser.add_argument("--model", nargs="*")
+    parser.add_argument("--tool", nargs="*")
+    args = parser.parse_args()
+
+    for dataset, model, tool in iter_configs(args.dataset, args.model, args.tool,
+                                             include_baseline=args.model is None and args.tool is None):
+        meta = convert_one(dataset, model, tool)
+        detail = meta.get("error", f"{meta['source_bytes'] // 1024} KB")
+        print(f"{config_id(dataset, model, tool):32} {meta['status']:14} {meta['seconds']:7.1f}s  {detail}")
+
+
+if __name__ == "__main__":
+    main()
