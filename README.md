@@ -120,6 +120,27 @@ Với mỗi mẫu, board gọi `bench_predict` 3 lần không đo, rồi 7 lần
 | Stack | kích thước stack trừ stack trống tối thiểu |
 | Thời gian suy luận | trung vị và phân vị 95 của các trung vị theo mẫu, đơn vị chu kỳ và µs |
 
+## Lỗi và sai lệch
+
+`python -m bench.failures` gom mọi lỗi chuyển đổi, lỗi biên dịch, lỗi build và mọi cấu hình có nhãn khác Python vào `results/failures.csv`, mỗi dòng kèm mã nguyên nhân và file kiểm chứng.
+
+| Mã nguyên nhân | Nội dung | Kiểm chứng |
+| --- | --- | --- |
+| `micromlgen_xgb_binary` | micromlgen không chuyển được XGBoost 2 lớp (`num_class=0`, `ZeroDivisionError`) | `meta.json` |
+| `m2cgen_svc_source_size` | SVC HAR qua m2cgen sinh file C khoảng 60 MB, biên dịch trên máy tính quá 1800 s | `host_check.csv` |
+| `emlearn_threshold_6_decimals` | emlearn in ngưỡng chia với 6 chữ số thập phân (`"{:.6f}f"`, `emlearn/cgen.py`), so sánh `x < thr` | `pilot/host_mismatch_emulation.py` |
+| `rf_hard_voting` | rừng cây sinh ra bỏ phiếu mỗi cây một phiếu; scikit-learn lấy trung bình xác suất | `pilot/host_mismatch_emulation.py` |
+| `emlearn_gnb_q16_overflow` | emlearn tính Gaussian NB bằng Q16.16, không có prior; tràn số khi khoảng cách chuẩn hóa lớn | `pilot/gnb_emlearn_q16.py` |
+| `micromlgen_gnb_formula` | micromlgen tính `prior − Σ(log var + abs(x − μ) / var)` thay cho log-likelihood Gauss | `pilot/host_mismatch_emulation.py` |
+| `micromlgen_svc_intercept_sign` | micromlgen trừ intercept của SVC 2 lớp thay vì cộng | `pilot/host_mismatch_emulation.py` |
+| `xgb_threshold_ties` | XGBoost dùng ngưỡng float32 và `x < thr`; m2cgen so với hằng `double`, micromlgen dùng `x <= thr`, nên đầu vào bằng đúng ngưỡng có thể rẽ nhánh khác | `pilot/xgboost_threshold_ties.py` |
+| `xtensa_literal_range` | hàm sinh ra dài hơn tầm 256 KB của lệnh `L32R` | `size.csv`, bản build lại `litpools` |
+| `region_overflow` | mô hình không vừa một vùng nhớ hoặc phân vùng ứng dụng | `size.csv` |
+| `build_timeout` | build không xong sau 3600 s | `size.csv` |
+| `compiler_killed` | `cc1` bị dừng bằng SIGKILL, chưa xác nhận nguyên nhân | `size.csv` |
+
+`pilot/host_mismatch_emulation.py` mô phỏng mã sinh ra bằng numpy; với dt, rf, gnb (micromlgen) và svc 2 lớp (micromlgen), tỉ lệ khớp mô phỏng trùng với `host_check.csv` ở cả 30 cấu hình.
+
 ## Cài đặt
 
 ```bash
