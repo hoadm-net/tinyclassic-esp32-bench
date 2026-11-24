@@ -1,0 +1,22 @@
+{
+  "occupancy": {
+    "file": "occupancy+detection.zip",
+    "url": "https://archive.ics.uci.edu/static/public/357/occupancy+detection.zip",
+    "sha256": "4ae3f46aa98eedff564a9f6924d1635173e2fd2c816004342a9be93076d3a81a"
+  },
+  "gasdrift": {
+    "file": "gas+sensor+array+drift+dataset.zip",
+    "url": "https://archive.ics.uci.edu/static/public/224/gas+sensor+array+drift+dataset.zip",
+    "sha256": "91e8f466f202e7a093d657673ce47311c3e90416f7df3057966058961c351fe4"
+  },
+  "har": {
+    "file": "human+activity+recognition+using+smartphones.zip",
+    "url": "https://archive.ics.uci.edu/static/public/240/human+activity+recognition+using+smartphones.zip",
+    "sha256": "c00b803081a5c797cd5e4b83700a9810b38d53d9d84e01917e090e1fdbc81031"
+  },
+  "smoke": {
+    "file": "final.csv",
+    "url": "https://raw.githubusercontent.com/Blatts01/ai-smokedetector/e1b9d33cbca5885e2bb68fe4467e6e6960eebf91/data/final.csv",
+    "sha256": "b30443d7f0d9cef79cd302cfc1dc30e169ad2cc7d2a8a2260d9f3bb84080e5f1"
+  }
+}
