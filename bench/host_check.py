@@ -17,6 +17,7 @@ import emlearn
 import numpy as np
 import pandas as pd
 
+from bench import proc
 from bench.config import (DATA_PROCESSED, HOST_DIR, MODELS_DIR, RESULTS, config_id,
                           generated_dir, iter_configs)
 
@@ -36,8 +37,7 @@ def compile_host(src_dir: Path, exe: Path, cc: str, cxx: str) -> tuple[bool, str
             compiler, flags = cc, ["-O2", "-std=gnu11", "-Wdouble-promotion"]
         else:
             compiler, flags = cc, ["-O2", "-w", "-std=gnu11"]
-        r = subprocess.run([compiler, *flags, *inc, "-c", str(src), "-o", str(obj)],
-                           capture_output=True, text=True, timeout=TIMEOUT_S)
+        r = proc.run([compiler, *flags, *inc, "-c", str(src), "-o", str(obj)], timeout=TIMEOUT_S)
         if src.name == "model.c":
             promotions = r.stderr.count("[-Wdouble-promotion]")
         if r.returncode:
